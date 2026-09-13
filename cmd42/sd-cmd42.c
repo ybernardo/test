@@ -1,5 +1,5 @@
 /*
- * sd-cmd42.c - Minimal userspace helper for SD CMD42 unlock and force erase.
+ * sd-cmd42.c - Minimal userspace helper for SD CMD42 unlock, password clearing and force erase.
  *
  * GPL-2.0-only. Force Erase permanently destroys all card data and clears
  * the password. Operations are restricted to whole native MMC block devices
@@ -38,8 +38,9 @@
 #define MMC_SET_BLOCKLEN  16U
 #define MMC_LOCK_UNLOCK   42U
 
-#define MMC_CMD42_UNLOCK      0x00U
-#define MMC_CMD42_FORCE_ERASE 0x08U
+#define MMC_CMD42_UNLOCK        0x00U
+#define MMC_CMD42_CLEAR_PASSWORD 0x02U
+#define MMC_CMD42_FORCE_ERASE   0x08U
 #define SD_MAX_PASSWORD_LEN   16U
 
 #define R1_CARD_IS_LOCKED     (1U << 25)
@@ -55,10 +56,12 @@ static void usage(const char *program)
 	fprintf(stderr,
 		"Uso:\n"
 		"  %s unlock /dev/mmcblkN SENHA\n"
+		"  %s clear  /dev/mmcblkN SENHA\n"
 		"  %s erase  /dev/mmcblkN --confirm-erase\n\n"
 		"unlock preserva os dados e dura ate o cartao perder alimentacao.\n"
+		"clear remove a senha permanentemente e preserva todos os dados.\n"
 		"erase apaga permanentemente todo o cartao e remove a senha.\n",
-		program, program);
+		program, program, program);
 }
 
 static int read_sd_type(const char *base)
@@ -280,6 +283,44 @@ static int unlock_card(int fd, const char *password, uint32_t rca,
 	return 0;
 }
 
+static int clear_password(int fd, const char *password, uint32_t rca,
+			  uint32_t *status)
+{
+	size_t password_length = strlen(password);
+	uint8_t payload[2 + SD_MAX_PASSWORD_LEN] = {0};
+	uint32_t command_response = 0;
+
+	if (password_length == 0 || password_length > SD_MAX_PASSWORD_LEN) {
+		fprintf(stderr, "A senha SD deve possuir de 1 a %u bytes.\n",
+			SD_MAX_PASSWORD_LEN);
+		return -1;
+	}
+
+	payload[0] = MMC_CMD42_CLEAR_PASSWORD;
+	payload[1] = (uint8_t)password_length;
+	memcpy(payload + 2, password, password_length);
+
+	if (send_cmd42(fd, payload, (uint32_t)(2 + password_length),
+		       CMD42_UNLOCK_TIMEOUT_MS, &command_response) != 0)
+		return -1;
+
+	usleep(100000);
+	if (send_status(fd, rca, status) != 0)
+		return -1;
+
+	if (*status & (R1_LOCK_UNLOCK_FAILED | R1_ILLEGAL_COMMAND | R1_ERROR)) {
+		fprintf(stderr, "Remocao da senha recusada (R1=0x%08x).\n", *status);
+		return -1;
+	}
+	if (*status & R1_CARD_IS_LOCKED) {
+		fprintf(stderr, "O cartao permaneceu bloqueado (R1=0x%08x).\n",
+			*status);
+		return -1;
+	}
+
+	return 0;
+}
+
 static int force_erase(int fd, uint32_t *response)
 {
 	uint8_t payload[2] = { MMC_CMD42_FORCE_ERASE, 0x00 };
@@ -304,12 +345,14 @@ int main(int argc, char **argv)
 	uint32_t response = 0;
 	int fd;
 	int unlock_mode;
+	int clear_mode;
 	int erase_mode;
 
 	unlock_mode = argc == 4 && strcmp(argv[1], "unlock") == 0;
+	clear_mode = argc == 4 && strcmp(argv[1], "clear") == 0;
 	erase_mode = argc == 4 && strcmp(argv[1], "erase") == 0 &&
 		     strcmp(argv[3], "--confirm-erase") == 0;
-	if (!unlock_mode && !erase_mode) {
+	if (!unlock_mode && !clear_mode && !erase_mode) {
 		usage(argv[0]);
 		return EXIT_FAILURE;
 	}
@@ -348,6 +391,15 @@ int main(int argc, char **argv)
 		}
 		fprintf(stderr,
 			"SUCESSO: senha aceita; cartao desbloqueado (R1=0x%08x).\n",
+			response);
+	} else if (clear_mode) {
+		fprintf(stderr, "Enviando CMD42 Clear Password...\n");
+		if (clear_password(fd, argv[3], rca, &response) != 0) {
+			close(fd);
+			return EXIT_FAILURE;
+		}
+		fprintf(stderr,
+			"SUCESSO: senha removida sem apagar os dados (R1=0x%08x).\n",
 			response);
 	} else {
 		fprintf(stderr,
