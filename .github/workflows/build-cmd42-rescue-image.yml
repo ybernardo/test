@@ -19,6 +19,8 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          sudo sed -i '/^Types: deb$/a Architectures: amd64' \
+            /etc/apt/sources.list.d/ubuntu.sources
           sudo dpkg --add-architecture arm64
           curl -fsSL https://archive.raspberrypi.com/debian/raspberrypi.gpg.key |
             gpg --dearmor |
