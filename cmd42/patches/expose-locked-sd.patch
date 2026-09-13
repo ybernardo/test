@@ -1,0 +1,32 @@
+--- a/drivers/mmc/core/sd.c
++++ b/drivers/mmc/core/sd.c
+@@ -1368,6 +1368,7 @@ static int mmc_sd_init_card(struct mmc_host *host, u32 ocr,
+ 	int err;
+ 	u32 cid[4];
+ 	u32 rocr = 0;
++	u32 status = 0;
+ 	bool v18_fixup_failed = false;
+ 
+ 	WARN_ON(!host->claimed);
+@@ -1440,6 +1441,21 @@ retry:
+ 			goto free_card;
+ 	}
+ 
++	/*
++	 * A password-locked SD card cannot complete the regular setup below.
++	 * Keep it registered so userspace can send CMD42 through MMC ioctl.
++	 */
++	err = mmc_send_status(card, &status);
++	if (err)
++		goto free_card;
++
++	if (status & R1_CARD_IS_LOCKED) {
++		pr_info("%s: password-locked SD card detected; exposing it for CMD42\n",
++			mmc_hostname(host));
++		host->card = card;
++		return 0;
++	}
++
+ 	/* Apply quirks prior to card setup */
+ 	mmc_fixup_device(card, mmc_sd_fixups);
+ 
