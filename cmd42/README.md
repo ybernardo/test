@@ -53,11 +53,53 @@ utilitário aceita somente caracteres ASCII imprimíveis.
 - `set-lock` grava a senha e bloqueia imediatamente.
 - `unlock` preserva os dados, mas o desbloqueio dura somente até o cartão
   perder alimentação.
-- `clear` remove a senha permanentemente sem apagar os dados.
+- `clear` remove a senha permanentemente sem apagar os dados. Se o cartão
+  estiver bloqueado, o próprio comando o desbloqueia internamente antes de
+  remover a senha; não é necessário executar `unlock` separadamente.
 - `erase` executa Force Erase, destrói permanentemente todo o conteúdo e
   remove a senha.
 - Operações que podem tornar os dados inacessíveis são recusadas quando o
   cartão ou alguma de suas partições está montado.
+- Locks transitórios causados pelo `udev` são aguardados por até 60 segundos.
+  A ferramenta não interrompe o serviço `udev` e não encerra processos.
+
+## Fluxos recomendados
+
+Recuperar os dados quando a senha é conhecida e remover a proteção de forma
+permanente:
+
+```bash
+sudo sd-cmd42 clear /dev/mmcblk0
+```
+
+O comando solicita a senha sem eco, desbloqueia o cartão quando necessário,
+remove a senha e carrega a tabela de partições somente ao final. Isso evita a
+corrida observada entre `unlock`, a sondagem automática do `udev` e um
+`clear` executado logo em seguida.
+
+Recuperar somente o cartão, descartando permanentemente os dados, quando a
+senha não é conhecida:
+
+```bash
+sudo sd-cmd42 erase /dev/mmcblk0 --confirm-erase
+```
+
+Confira cuidadosamente o dispositivo e a capacidade exibidos antes de
+confirmar o Force Erase. Ao terminar, remova e reinsira o cartão; ele ficará
+sem senha, sem tabela de partições e precisará ser particionado e formatado.
+
+## Validação prática
+
+O ciclo completo abaixo foi validado em uma Raspberry Pi 4 com o leitor SD
+nativo e um cartão SDXC de 128 GB:
+
+1. `set`
+2. `lock`
+3. `unlock`
+4. `clear`, incluindo solicitação de senha sem eco
+5. remoção e reinserção, confirmando que a senha foi eliminada
+6. `set-lock`
+7. `erase`, confirmando a remoção da senha e da tabela de partições
 
 O kernel resultante deve ser instalado com um caminho de rollback; não
 sobrescreva o kernel funcional sem backup.

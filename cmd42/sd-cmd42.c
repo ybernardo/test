@@ -55,6 +55,8 @@
 
 #define CMD42_PASSWORD_TIMEOUT_MS 60000U
 #define CMD42_ERASE_TIMEOUT_MS   600000U
+#define EXCLUSIVE_LOCK_TIMEOUT_MS  60000U
+#define EXCLUSIVE_LOCK_RETRY_MS      250U
 
 enum operation {
 	OP_NONE,
@@ -344,13 +346,29 @@ static int send_cmd42(int fd, uint8_t *payload, uint32_t length,
 	return 0;
 }
 
+static int refresh_partitions(int fd)
+{
+	uint8_t sector[512];
+
+	if (pread(fd, sector, sizeof(sector), 0) != (ssize_t)sizeof(sector)) {
+		fprintf(stderr, "A leitura do setor 0 falhou: %s\n",
+			strerror(errno));
+		return -1;
+	}
+
+	if (ioctl(fd, BLKRRPART) != 0)
+		fprintf(stderr, "Aviso: releitura da tabela de particoes falhou: %s\n",
+			strerror(errno));
+
+	return 0;
+}
+
 static int unlock_card(int fd, const char *password, uint32_t rca,
-		       uint32_t *status)
+		       uint32_t *status, int refresh)
 {
 	size_t password_length = strlen(password);
 	uint8_t payload[CMD42_PASSWORD_BLOCK_SIZE] = {0};
 	uint32_t command_response = 0;
-	uint8_t sector[512];
 
 	if (password_length == 0 || password_length > SD_MAX_PASSWORD_LEN) {
 		fprintf(stderr, "A senha SD deve possuir de 1 a %u bytes.\n",
@@ -380,17 +398,7 @@ static int unlock_card(int fd, const char *password, uint32_t rca,
 		return -1;
 	}
 
-	if (pread(fd, sector, sizeof(sector), 0) != (ssize_t)sizeof(sector)) {
-		fprintf(stderr, "Desbloqueou, mas a leitura do setor 0 falhou: %s\n",
-			strerror(errno));
-		return -1;
-	}
-
-	if (ioctl(fd, BLKRRPART) != 0)
-		fprintf(stderr, "Aviso: releitura da tabela de particoes falhou: %s\n",
-			strerror(errno));
-
-	return 0;
+	return refresh ? refresh_partitions(fd) : 0;
 }
 
 static int clear_password(int fd, const char *password, uint32_t rca,
@@ -551,6 +559,43 @@ static int target_has_mounts(const char *base)
 	return 0;
 }
 
+static int acquire_exclusive_lock(int fd, const char *device)
+{
+	unsigned int waited_ms = 0;
+	int announced = 0;
+
+	for (;;) {
+		if (flock(fd, LOCK_EX | LOCK_NB) == 0) {
+			if (announced)
+				fprintf(stderr, "Dispositivo liberado; continuando.\n");
+			return 0;
+		}
+
+		if (errno != EWOULDBLOCK && errno != EAGAIN) {
+			fprintf(stderr, "Nao foi possivel bloquear exclusivamente %s: %s\n",
+				device, strerror(errno));
+			return -1;
+		}
+
+		if (!announced) {
+			fprintf(stderr,
+				"%s esta temporariamente ocupado; aguardando ate %u segundos...\n",
+				device, EXCLUSIVE_LOCK_TIMEOUT_MS / 1000U);
+			announced = 1;
+		}
+
+		if (waited_ms >= EXCLUSIVE_LOCK_TIMEOUT_MS) {
+			fprintf(stderr,
+				"Tempo esgotado: %s continua em uso. Verifique mounts e processos.\n",
+				device);
+			return -1;
+		}
+
+		usleep(EXCLUSIVE_LOCK_RETRY_MS * 1000U);
+		waited_ms += EXCLUSIVE_LOCK_RETRY_MS;
+	}
+}
+
 static enum operation parse_operation(const char *name)
 {
 	if (strcmp(name, "unlock") == 0)
@@ -614,7 +659,7 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	if (read_rca(base, &rca) != 0)
 		return EXIT_FAILURE;
-	if (operation == OP_SET || operation == OP_LOCK ||
+	if (operation == OP_CLEAR || operation == OP_SET || operation == OP_LOCK ||
 	    operation == OP_SET_LOCK || operation == OP_ERASE) {
 		if (target_has_mounts(base) != 0)
 			return EXIT_FAILURE;
@@ -625,9 +670,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "open(%s): %s\n", resolved, strerror(errno));
 		return EXIT_FAILURE;
 	}
-	if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
-		fprintf(stderr, "Nao foi possivel bloquear exclusivamente %s: %s\n",
-			resolved, strerror(errno));
+	if (acquire_exclusive_lock(fd, resolved) != 0) {
 		close(fd);
 		return EXIT_FAILURE;
 	}
@@ -671,7 +714,7 @@ int main(int argc, char **argv)
 
 	if (operation == OP_UNLOCK) {
 		fprintf(stderr, "Enviando CMD42 Unlock...\n");
-		if (unlock_card(fd, password, rca, &response) != 0) {
+		if (unlock_card(fd, password, rca, &response, 1) != 0) {
 			explicit_bzero(password, sizeof(password));
 			close(fd);
 			return EXIT_FAILURE;
@@ -680,6 +723,24 @@ int main(int argc, char **argv)
 			"SUCESSO: senha aceita; cartao desbloqueado (R1=0x%08x).\n",
 			response);
 	} else if (operation == OP_CLEAR) {
+		uint32_t initial_status = 0;
+		int was_locked;
+
+		if (send_status(fd, rca, &initial_status) != 0) {
+			explicit_bzero(password, sizeof(password));
+			close(fd);
+			return EXIT_FAILURE;
+		}
+		was_locked = !!(initial_status & R1_CARD_IS_LOCKED);
+		if (was_locked) {
+			fprintf(stderr,
+				"Cartao bloqueado; desbloqueando antes de remover a senha...\n");
+			if (unlock_card(fd, password, rca, &response, 0) != 0) {
+				explicit_bzero(password, sizeof(password));
+				close(fd);
+				return EXIT_FAILURE;
+			}
+		}
 		fprintf(stderr, "Enviando CMD42 Clear Password...\n");
 		if (clear_password(fd, password, rca, &response) != 0) {
 			explicit_bzero(password, sizeof(password));
@@ -689,6 +750,9 @@ int main(int argc, char **argv)
 		fprintf(stderr,
 			"SUCESSO: senha removida sem apagar os dados (R1=0x%08x).\n",
 			response);
+		if (was_locked && refresh_partitions(fd) != 0)
+			fprintf(stderr,
+				"Aviso: reinsira o cartao para carregar suas particoes.\n");
 	} else if (operation == OP_SET) {
 		fprintf(stderr, "Enviando CMD42 Set Password...\n");
 		if (set_password(fd, password, rca, &response, 0) != 0) {
