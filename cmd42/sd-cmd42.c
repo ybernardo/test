@@ -46,6 +46,7 @@
 #define MMC_CMD42_SET_AND_LOCK   0x05U
 #define MMC_CMD42_FORCE_ERASE    0x08U
 #define SD_MAX_PASSWORD_LEN      16U
+#define CMD42_PASSWORD_BLOCK_SIZE 512U
 
 #define R1_CARD_IS_LOCKED     (1U << 25)
 #define R1_LOCK_UNLOCK_FAILED (1U << 24)
@@ -347,7 +348,7 @@ static int unlock_card(int fd, const char *password, uint32_t rca,
 		       uint32_t *status)
 {
 	size_t password_length = strlen(password);
-	uint8_t payload[2 + SD_MAX_PASSWORD_LEN] = {0};
+	uint8_t payload[CMD42_PASSWORD_BLOCK_SIZE] = {0};
 	uint32_t command_response = 0;
 	uint8_t sector[512];
 
@@ -361,7 +362,7 @@ static int unlock_card(int fd, const char *password, uint32_t rca,
 	payload[1] = (uint8_t)password_length;
 	memcpy(payload + 2, password, password_length);
 
-	if (send_cmd42(fd, payload, (uint32_t)(2 + password_length),
+	if (send_cmd42(fd, payload, sizeof(payload),
 		       CMD42_PASSWORD_TIMEOUT_MS, &command_response) != 0)
 		return -1;
 
@@ -396,7 +397,7 @@ static int clear_password(int fd, const char *password, uint32_t rca,
 			  uint32_t *status)
 {
 	size_t password_length = strlen(password);
-	uint8_t payload[2 + SD_MAX_PASSWORD_LEN] = {0};
+	uint8_t payload[CMD42_PASSWORD_BLOCK_SIZE] = {0};
 	uint32_t command_response = 0;
 
 	if (password_length == 0 || password_length > SD_MAX_PASSWORD_LEN) {
@@ -409,7 +410,7 @@ static int clear_password(int fd, const char *password, uint32_t rca,
 	payload[1] = (uint8_t)password_length;
 	memcpy(payload + 2, password, password_length);
 
-	if (send_cmd42(fd, payload, (uint32_t)(2 + password_length),
+	if (send_cmd42(fd, payload, sizeof(payload),
 		       CMD42_PASSWORD_TIMEOUT_MS, &command_response) != 0)
 		return -1;
 
@@ -434,7 +435,7 @@ static int set_password(int fd, const char *password, uint32_t rca,
 			uint32_t *status, int lock_now)
 {
 	size_t password_length = strlen(password);
-	uint8_t payload[2 + SD_MAX_PASSWORD_LEN] = {0};
+	uint8_t payload[CMD42_PASSWORD_BLOCK_SIZE] = {0};
 	uint32_t command_response = 0;
 
 	if (validate_password(password) != 0)
@@ -444,7 +445,7 @@ static int set_password(int fd, const char *password, uint32_t rca,
 	payload[1] = (uint8_t)password_length;
 	memcpy(payload + 2, password, password_length);
 
-	if (send_cmd42(fd, payload, (uint32_t)(2 + password_length),
+	if (send_cmd42(fd, payload, sizeof(payload),
 		       CMD42_PASSWORD_TIMEOUT_MS, &command_response) != 0)
 		return -1;
 	usleep(100000);
@@ -472,7 +473,7 @@ static int lock_card(int fd, const char *password, uint32_t rca,
 		     uint32_t *status)
 {
 	size_t password_length = strlen(password);
-	uint8_t payload[2 + SD_MAX_PASSWORD_LEN] = {0};
+	uint8_t payload[CMD42_PASSWORD_BLOCK_SIZE] = {0};
 	uint32_t command_response = 0;
 
 	if (validate_password(password) != 0)
@@ -481,7 +482,7 @@ static int lock_card(int fd, const char *password, uint32_t rca,
 	payload[1] = (uint8_t)password_length;
 	memcpy(payload + 2, password, password_length);
 
-	if (send_cmd42(fd, payload, (uint32_t)(2 + password_length),
+	if (send_cmd42(fd, payload, sizeof(payload),
 		       CMD42_PASSWORD_TIMEOUT_MS, &command_response) != 0)
 		return -1;
 	usleep(100000);
