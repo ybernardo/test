@@ -1,0 +1,132 @@
+name: Build Raspberry Pi CMD42 rescue image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kernel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install kernel build dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo dpkg --add-architecture arm64
+          curl -fsSL https://archive.raspberrypi.com/debian/raspberrypi.gpg.key |
+            gpg --dearmor |
+            sudo tee /usr/share/keyrings/raspberrypi-archive-keyring.gpg >/dev/null
+          echo 'deb [arch=arm64 signed-by=/usr/share/keyrings/raspberrypi-archive-keyring.gpg] https://archive.raspberrypi.com/debian/ trixie main' |
+            sudo tee /etc/apt/sources.list.d/raspberrypi-cmd42.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex gcc-aarch64-linux-gnu libssl-dev libelf-dev \
+            dwarves xz-utils dpkg-dev
+
+      - name: Build kernel and utilities
+        shell: bash
+        run: bash cmd42/build-kernel.sh
+
+      - name: Upload image inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmd42-image-inputs
+          path: ${{ runner.temp }}/cmd42-kernel-build/artifact/
+          if-no-files-found: error
+          retention-days: 1
+
+  image:
+    needs: kernel
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download kernel and utilities
+        uses: actions/download-artifact@v4
+        with:
+          name: cmd42-image-inputs
+          path: cmd42-image-inputs
+
+      - name: Install pi-gen dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            coreutils quilt parted qemu-user-static debootstrap zerofree \
+            zip dosfstools e2fsprogs libarchive-tools libcap2-bin grep \
+            rsync xz-utils file git curl bc gpg pigz xxd arch-test \
+            bmap-tools kmod
+
+      - name: Prepare pinned pi-gen tree
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git clone --no-checkout https://github.com/RPi-Distro/pi-gen.git pi-gen
+          git -C pi-gen checkout 86919dae864359499d8148a49910a558d49a00f1
+
+          cp -a cmd42/pi-gen/04-cmd42-rescue \
+            pi-gen/export-image/04-cmd42-rescue
+
+          stage_files=pi-gen/export-image/04-cmd42-rescue/files
+          cp cmd42-image-inputs/kernel8-cmd42-*.img.gz \
+            "${stage_files}/kernel8-cmd42.img"
+          cp cmd42-image-inputs/linux-image-*.deb \
+            "${stage_files}/linux-image-cmd42.deb"
+          cp cmd42-image-inputs/sd-cmd42 "${stage_files}/sd-cmd42"
+          cp cmd42-image-inputs/cmd42-rescue "${stage_files}/cmd42-rescue"
+
+          cat >pi-gen/config <<'CONFIG'
+          IMG_NAME='raspberrypi-cmd42-rescue'
+          PI_GEN_RELEASE='Raspberry Pi CMD42 Rescue'
+          RELEASE='trixie'
+          DEPLOY_COMPRESSION='xz'
+          COMPRESSION_LEVEL='6'
+          TARGET_HOSTNAME='raspberrypi-cmd42'
+          FIRST_USER_NAME='pi'
+          ENABLE_SSH='1'
+          LOCALE_DEFAULT='pt_BR.UTF-8'
+          KEYBOARD_KEYMAP='br'
+          KEYBOARD_LAYOUT='Portuguese (Brazil)'
+          TIMEZONE_DEFAULT='America/Sao_Paulo'
+          WPA_COUNTRY='BR'
+          STAGE_LIST='stage0 stage1 stage2'
+          CONFIG
+
+      - name: Build clean Raspberry Pi OS Lite image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          df -h /
+          cd pi-gen
+          sudo ./build.sh
+
+      - name: Verify and checksum image
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          find pi-gen/deploy -maxdepth 1 -type f -name '*.img.xz' -print -quit |
+            grep -q .
+          cd pi-gen/deploy
+          sha256sum *.img.xz > SHA256SUMS
+          ls -lh *.img.xz SHA256SUMS
+
+      - name: Upload rescue image
+        uses: actions/upload-artifact@v4
+        with:
+          name: raspberry-pi4-cmd42-rescue-image
+          path: |
+            pi-gen/deploy/*.img.xz
+            pi-gen/deploy/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,8 @@
+Raspberry Pi CMD42 Rescue
+
+Use o leitor microSD integrado da Raspberry Pi 4 para o cartao alvo.
+Abra o menu com:
+
+  sudo cmd42-rescue
+
+O Force Erase destrói permanentemente todos os dados do cartao.

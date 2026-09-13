@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+if [[ ${EUID} -ne 0 ]]; then
+  exec sudo -- "$0" "$@"
+fi
+
+find_sd_cards() {
+  local sysdev base type
+
+  for sysdev in /sys/class/block/mmcblk[0-9]*; do
+    [[ -e "${sysdev}" ]] || continue
+    base="${sysdev##*/}"
+    [[ "${base}" =~ ^mmcblk[0-9]+$ ]] || continue
+    [[ -r "${sysdev}/device/type" ]] || continue
+    read -r type < "${sysdev}/device/type"
+    [[ "${type}" == SD ]] || continue
+    printf '/dev/%s\n' "${base}"
+  done
+}
+
+select_card() {
+  local -a cards=()
+  local choice index
+
+  mapfile -t cards < <(find_sd_cards)
+  if (( ${#cards[@]} == 0 )); then
+    echo "Nenhum cartao SD foi detectado pelo leitor nativo."
+    echo "Insira o cartao, aguarde alguns segundos e execute novamente."
+    return 1
+  fi
+
+  if (( ${#cards[@]} == 1 )); then
+    TARGET_DEVICE="${cards[0]}"
+    return 0
+  fi
+
+  echo "Cartoes SD detectados:"
+  for index in "${!cards[@]}"; do
+    printf '  %d) ' "$((index + 1))"
+    lsblk -dn -o NAME,SIZE,MODEL "${cards[index]}"
+  done
+  read -r -p "Selecione o numero do cartao: " choice
+  [[ "${choice}" =~ ^[0-9]+$ ]] || return 1
+  (( choice >= 1 && choice <= ${#cards[@]} )) || return 1
+  TARGET_DEVICE="${cards[choice - 1]}"
+}
+
+show_card() {
+  echo
+  echo "Cartao selecionado:"
+  lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINTS "${TARGET_DEVICE}"
+  echo
+}
+
+run_and_report() {
+  local result=0
+
+  "$@" || result=$?
+  echo
+  lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINTS "${TARGET_DEVICE}" || true
+  if (( result != 0 )); then
+    echo "A operacao terminou com erro (codigo ${result})."
+  fi
+  return 0
+}
+
+select_card
+show_card
+
+while true; do
+  cat <<'MENU'
+1) Remover senha e preservar os dados
+2) Desbloquear temporariamente
+3) Apagar completamente sem conhecer a senha
+4) Definir uma nova senha
+5) Definir uma senha e bloquear agora
+6) Bloquear usando a senha configurada
+0) Sair
+MENU
+  read -r -p "Opcao: " option
+  echo
+
+  case "${option}" in
+    1)
+      run_and_report sd-cmd42 clear "${TARGET_DEVICE}"
+      ;;
+    2)
+      run_and_report sd-cmd42 unlock "${TARGET_DEVICE}"
+      ;;
+    3)
+      echo "ATENCAO: todos os dados de ${TARGET_DEVICE} serao destruidos."
+      read -r -p 'Digite APAGAR para continuar: ' confirmation
+      if [[ "${confirmation}" == APAGAR ]]; then
+        run_and_report sd-cmd42 erase "${TARGET_DEVICE}" --confirm-erase
+      else
+        echo "Operacao cancelada."
+      fi
+      ;;
+    4)
+      run_and_report sd-cmd42 set "${TARGET_DEVICE}"
+      ;;
+    5)
+      run_and_report sd-cmd42 set-lock "${TARGET_DEVICE}" --confirm-lock
+      ;;
+    6)
+      run_and_report sd-cmd42 lock "${TARGET_DEVICE}" --confirm-lock
+      ;;
+    0)
+      exit 0
+      ;;
+    *)
+      echo "Opcao invalida."
+      ;;
+  esac
+  echo
+done
