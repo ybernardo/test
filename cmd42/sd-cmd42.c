@@ -71,11 +71,11 @@ static void usage(const char *program)
 		"Uso:\n"
 		"  %s unlock   /dev/mmcblkN [SENHA]\n"
 		"  %s clear    /dev/mmcblkN [SENHA]\n"
-		"  %s set      /dev/mmcblkN\n"
-		"  %s lock     /dev/mmcblkN --confirm-lock\n"
-		"  %s set-lock /dev/mmcblkN --confirm-lock\n"
+		"  %s set      /dev/mmcblkN [NOVA_SENHA]\n"
+		"  %s lock     /dev/mmcblkN [SENHA] --confirm-lock\n"
+		"  %s set-lock /dev/mmcblkN [NOVA_SENHA] --confirm-lock\n"
 		"  %s erase    /dev/mmcblkN --confirm-erase\n\n"
-		"Sem SENHA na linha de comando, unlock e clear solicitam-na sem eco.\n"
+		"Sem SENHA na linha de comando, a ferramenta solicita-a sem eco.\n"
 		"set grava uma senha persistente sem bloquear a sessao atual.\n"
 		"lock bloqueia imediatamente usando a senha configurada.\n"
 		"set-lock grava uma senha e bloqueia imediatamente.\n"
@@ -588,16 +588,20 @@ int main(int argc, char **argv)
 		usage(argv[0]);
 		return EXIT_FAILURE;
 	}
-	if ((operation == OP_UNLOCK || operation == OP_CLEAR) && argc == 4)
+	if ((operation == OP_UNLOCK || operation == OP_CLEAR ||
+	     operation == OP_SET) && argc == 4)
 		supplied_password = argv[3];
 	else if ((operation == OP_UNLOCK || operation == OP_CLEAR ||
 		  operation == OP_SET) && argc != 3) {
 		usage(argv[0]);
 		return EXIT_FAILURE;
-	} else if ((operation == OP_LOCK || operation == OP_SET_LOCK) &&
-		   (argc != 4 || strcmp(argv[3], "--confirm-lock") != 0)) {
-		usage(argv[0]);
-		return EXIT_FAILURE;
+	} else if (operation == OP_LOCK || operation == OP_SET_LOCK) {
+		if (argc == 5 && strcmp(argv[4], "--confirm-lock") == 0)
+			supplied_password = argv[3];
+		else if (argc != 4 || strcmp(argv[3], "--confirm-lock") != 0) {
+			usage(argv[0]);
+			return EXIT_FAILURE;
+		}
 	} else if (operation == OP_ERASE &&
 		   (argc != 4 || strcmp(argv[3], "--confirm-erase") != 0)) {
 		usage(argv[0]);
@@ -635,7 +639,8 @@ int main(int argc, char **argv)
 	fprintf(stderr, "ALVO VALIDADO: %s, tipo SD, %.1f GiB, RCA=0x%04x.\n",
 		resolved, (double)size / (1024.0 * 1024.0 * 1024.0), rca);
 
-	if (operation == OP_SET || operation == OP_SET_LOCK) {
+	if ((operation == OP_SET || operation == OP_SET_LOCK) &&
+	    !supplied_password) {
 		if (read_new_password(password, sizeof(password)) != 0) {
 			close(fd);
 			return EXIT_FAILURE;
