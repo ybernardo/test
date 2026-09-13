@@ -1,0 +1,49 @@
+name: Build Raspberry Pi CMD42 kernel
+
+on:
+  push:
+    branches:
+      - cmd42-kernel
+    paths:
+      - 'cmd42/**'
+      - '.github/workflows/build-cmd42-kernel.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install cross-compilation dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo dpkg --add-architecture arm64
+          curl -fsSL https://archive.raspberrypi.com/debian/raspberrypi.gpg.key |
+            gpg --dearmor |
+            sudo tee /usr/share/keyrings/raspberrypi-archive-keyring.gpg >/dev/null
+          echo 'deb [arch=arm64 signed-by=/usr/share/keyrings/raspberrypi-archive-keyring.gpg] https://archive.raspberrypi.com/debian/ trixie main' |
+            sudo tee /etc/apt/sources.list.d/raspberrypi-cmd42.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex gcc-aarch64-linux-gnu libssl-dev libelf-dev \
+            dwarves xz-utils dpkg-dev
+
+      - name: Build patched ARM64 kernel
+        shell: bash
+        run: bash cmd42/build-kernel.sh
+
+      - name: Upload kernel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: raspberry-pi4-cmd42-kernel-6.18.39
+          path: ${{ runner.temp }}/cmd42-kernel-build/artifact/
+          if-no-files-found: error
+          retention-days: 7
