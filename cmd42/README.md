@@ -30,16 +30,16 @@ sudo install -m 0755 sd-cmd42 /usr/local/sbin/sd-cmd42
 ## Operações
 
 ```text
-sudo sd-cmd42 set      /dev/mmcblkN
-sudo sd-cmd42 lock     /dev/mmcblkN --confirm-lock
-sudo sd-cmd42 set-lock /dev/mmcblkN --confirm-lock
+sudo sd-cmd42 set      /dev/mmcblkN [NOVA_SENHA]
+sudo sd-cmd42 lock     /dev/mmcblkN [SENHA] --confirm-lock
+sudo sd-cmd42 set-lock /dev/mmcblkN [NOVA_SENHA] --confirm-lock
 sudo sd-cmd42 unlock   /dev/mmcblkN
 sudo sd-cmd42 clear    /dev/mmcblkN
 sudo sd-cmd42 erase    /dev/mmcblkN --confirm-erase
 ```
 
-As senhas são solicitadas sem eco. `unlock` e `clear` ainda aceitam uma
-senha como argumento para compatibilidade, mas isso não é recomendado porque
+Quando omitidas, as senhas são solicitadas sem eco. Os comandos também aceitam
+a senha como argumento para automação e compatibilidade, mas isso não é recomendado porque
 ela pode ficar registrada no histórico do shell e visível na lista de
 processos.
 
